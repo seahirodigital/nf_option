@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JPXオプション建玉残高・増減モニタリング</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#7C4DFF',
+                        secondary: '#651FFF',
+                        bgLight: '#f8fafc',
+                        textPrimary: '#334155',
+                        textSecondary: '#64748b',
+                        borderLight: '#e2e8f0',
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script> <!-- Required for zoom plugin -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+    <!-- SheetJS (XLSX) -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
+    <style>
+        body {
+            background-color: #f8fafc;
+            color: #334155;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            min-height: 100vh;
+        }
+        .glass-panel {
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 0.75rem;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+        .btn-primary {
+            background: #7C4DFF;
+            color: white;
+            font-weight: bold;
+            transition: transform 0.2s, box-shadow 0.2s, background-color 0.2s;
+        }
+        .btn-primary:hover {
+            background: #651FFF;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px -1px rgba(124, 77, 255, 0.3);
+        }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .header-hp {
+            background: white;
+            color: #7C4DFF;
+            border-bottom: 1px solid #e2e8f0;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            position: sticky;
+            top: 0;
+            z-index: 50;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-700">
+
+    <!-- Header / Control Bar (HP Style) -->
+    <header class="header-hp flex flex-col md:flex-row justify-between items-center py-3 px-6 mb-6">
+        <div class="flex items-center gap-3">
+            <h1 class="text-xs font-bold text-[#7C4DFF]">
+                JPX デリバティブ建玉モニター
+            </h1>
+            <span id="statusText" class="text-slate-400 text-xs font-medium ml-2">待機中</span>
+        </div>
+        
+        <div class="flex items-center gap-4 text-xs mt-3 md:mt-0">
+            <div class="flex items-center gap-2">
+                <span class="text-slate-500 shrink-0">データ基準日:</span>
+                <select id="dateSelector" class="bg-white border border-slate-200 rounded px-2 py-0.5 text-slate-700 focus:outline-none focus:border-[#7C4DFF] [&>option]:text-slate-800">
+                    <option value="latest">最新の取得データ</option>
+                </select>
+            </div>
+            <div class="flex items-center gap-2">
+                <span class="text-slate-500 shrink-0 text-nowrap">自動取得:</span>
+                <input type="time" id="scheduleTime" value="20:10" class="bg-white border border-slate-200 rounded px-2 py-0.5 text-slate-700 focus:outline-none focus:border-[#7C4DFF]">
+            </div>
+            <button id="btnFetch" class="bg-[#7C4DFF] text-white hover:bg-[#651FFF] font-bold px-3 py-1 rounded text-xs flex items-center gap-2 transition-colors shadow-sm">
+                <span>データ取得</span>
+                <div id="loadingIndicator" class="loading hidden w-3 h-3 !border-white/30 !border-t-white"></div>
+            </button>
+        </div>
+    </header>
+
+<div class="max-w-7xl mx-auto space-y-6 px-6 pb-10">
+
+    <!-- Main Dashboard Grid -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        
+        <!-- Section 1: 概要チャート (3列) -->
+        <div class="glass-panel p-4 lg:col-span-2">
+            <div class="flex justify-between items-center mb-4 border-b border-slate-200 pb-2">
+                <h2 class="text-lg font-semibold text-slate-700">主要オプション 概要</h2>
+                <a href="https://www.jpx.co.jp/markets/derivatives/trading-volume/index.html" target="_blank" class="text-xs text-[#7C4DFF] hover:underline hover:text-[#651FFF]">※デリバティブ建玉残高状況 シートより</a>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="relative h-64">
+                    <canvas id="chartPurpose1_Diff"></canvas>
+                </div>
+                <div class="relative h-64">
+                    <canvas id="chartPurpose1_Total"></canvas>
+                </div>
+                <div class="relative h-64">
+                    <canvas id="chartTrend"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section 2: 日経225 プット・コール増減分布 -->
+        <div class="glass-panel p-4 lg:col-span-2">
+            <h2 class="text-lg font-semibold mb-4 border-b border-slate-200 pb-2">日経225オプション 権利行使価格別 建玉増減</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="relative h-[800px]">
+                    <canvas id="chartPurpose2_225_OI"></canvas>
+                </div>
+                <div class="relative h-[800px]">
+                    <canvas id="chartPurpose2_225_Diff"></canvas>
+                </div>
+            </div>
+        </div>
+
+    </div>
+    
+    <!-- Logs -->
+    <div class="glass-panel p-4 mt-8">
+        <details>
+            <summary class="cursor-pointer text-sm text-slate-500 font-semibold hover:text-slate-700 transition">システム動作ログ (デバッグ用)</summary>
+            <div id="logArea" class="mt-3 bg-slate-50 border border-slate-200 rounded p-3 h-40 overflow-y-auto text-xs font-mono text-slate-600">
+            </div>
+        </details>
+    </div>
+</div>
+
+<script>
+    let scheduleTimer = null;
+    let storedData = JSON.parse(localStorage.getItem('jpx_options_history') || '{}');
+    let chartObj = { p1_total: null, p1_diff: null, p2_225_oi: null, p2_225_diff: null, trend: null };
+    
+    // UI Elements
+    const logArea = document.getElementById('logArea');
+    const statusText = document.getElementById('statusText');
+    const timeInput = document.getElementById('scheduleTime');
+    const btnFetch = document.getElementById('btnFetch');
+    const loader = document.getElementById('loadingIndicator');
+    const dateSelector = document.getElementById('dateSelector');
+
+    // --- Core Functions ---
+    
+    function logMessage(msg, type='info') {
+        const time = new Date().toLocaleTimeString();
+        let color = type === 'error' ? 'text-rose-500' : (type === 'success' ? 'text-[#7C4DFF]' : 'text-slate-500');
+        logArea.innerHTML += `<div class="${color}">[${time}] ${msg}</div>`;
+        logArea.scrollTop = logArea.scrollHeight;
+        if(type === 'error' || type === 'success') {
+            statusText.textContent = msg.substring(0, 30) + (msg.length>30?"...":"");
+            statusText.className = `font-medium text-xs ${type === 'error' ? 'text-rose-500' : 'text-slate-400'}`; // Updated for white header
+        }
+    }
+
+    // Initialize
+    function init() {
+        // Load default time
+        const savedTime = localStorage.getItem('jpx_schedule_time');
+        if(savedTime) timeInput.value = savedTime;
+        
+        setupScheduler();
+        updateDateSelector();
+        
+        // Initial Render
+        const dates = Object.keys(storedData).sort();
+        if(dates.length > 0) {
+            renderAllCharts(dates[dates.length-1]);
+        }
+        
+        timeInput.addEventListener('change', (e) => {
+            localStorage.setItem('jpx_schedule_time', e.target.value);
+            setupScheduler();
+            logMessage(`自動取得時刻を ${e.target.value} に設定しました`);
+        });
+
+        btnFetch.addEventListener('click', () => {
+            fetchAndProcessData();
+        });
+
+        dateSelector.addEventListener('change', (e) => {
+            renderAllCharts(e.target.value);
+        });
+        
+        logMessage("システムを初期化しました", 'success');
+    }
+
+    // Scheduler
+    function setupScheduler() {
+        if(scheduleTimer) clearInterval(scheduleTimer);
+        
+        scheduleTimer = setInterval(() => {
+            const now = new Date();
+            const hr = now.getHours().toString().padStart(2, '0');
+            const min = now.getMinutes().toString().padStart(2, '0');
+            const currentHM = `${hr}:${min}`;
+            const targetHM = timeInput.value;
+            
+            if (currentHM === targetHM && now.getSeconds() < 10) {
+                const todayStr = getTodayString();
+                const lastFetch = localStorage.getItem('jpx_last_fetch_date');
+                if(lastFetch !== todayStr) {
+                    logMessage(`設定時刻 ${targetHM} になりました。自動取得を開始します...`);
+                    fetchAndProcessData();
+                    localStorage.setItem('jpx_last_fetch_date', todayStr);
+                }
+            }
+        }, 10000); // Check every 10s
+    }
+
+    function getTodayString() {
+        const d = new Date();
+        // Return YYYYMMDD
+        return d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
+    }
+
+    // --- Data Fetching & Extraction ---
+    
+    async function fetchAndProcessData() {
+        try {
+            btnFetch.disabled = true;
+            loader.classList.remove('hidden');
+            logMessage("最新のエクセルファイルURLを検索中...", 'info');
+            
+            // 1. Get JPX Index page via CORS proxies
+            const indexUrl = 'https://www.jpx.co.jp/markets/derivatives/trading-volume/index.html';
+            const indexProxies = [
+                `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(indexUrl)}`,
+                `https://api.allorigins.win/get?url=${encodeURIComponent(indexUrl)}`
+            ];
+
+            let htmlStr = null;
+            let indexError = null;
+            
+            for(let p of indexProxies) {
+                try {
+                    const idxResp = await fetch(p);
+                    if(!idxResp.ok) throw new Error(`HTTP ${idxResp.status}`);
+                    
+                    if(p.includes('allorigins.win/get')) {
+                        const json = await idxResp.json();
+                        htmlStr = json.contents;
+                    } else {
+                        htmlStr = await idxResp.text();
+                    }
+                    
+                    if(htmlStr && htmlStr.includes('open_interest.xlsx')) {
+                        break; // Success
+                    }
+                } catch(e) {
+                    indexError = e;
+                    logMessage(`Indexプロキシでの取得失敗: 次を試します...`, 'info');
+                }
+            }
+            
+            if(!htmlStr || !htmlStr.includes('open_interest.xlsx')) {
+                throw new Error(`Indexページからのリンク情報の取得に全て失敗しました: ${indexError?.message}`);
+            }
+            
+            // Extract URL matching open_interest.xlsx using DOMParser for better accuracy
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(htmlStr, 'text/html');
+            const anchors = Array.from(doc.querySelectorAll('a'));
+            const targetAnchor = anchors.find(a => {
+                const h = a.getAttribute('href');
+                return h && h.includes('open_interest.xlsx');
+            });
+            
+            if(!targetAnchor) throw new Error("open_interest.xlsx のリンクが見つかりませんでした");
+            
+            // Remove whitespaces and newlines from the href string that JPX puts in
+            let xlsxPath = targetAnchor.getAttribute('href').replace(/\s+/g, '');
+            
+            if(!xlsxPath.startsWith('http')) {
+                xlsxPath = "https://www.jpx.co.jp" + (xlsxPath.startsWith('/') ? '' : '/') + xlsxPath;
+            }
+            logMessage(`発見: ${xlsxPath}`, 'success');
+            
+            // Extract date from filename (e.g. 20260310open_interest.xlsx)
+            const dateMatch = xlsxPath.match(/(\d{8})open_interest/);
+            const dataDate = dateMatch ? dateMatch[1] : getTodayString();
+            
+            logMessage(`エクセルデータをダウンロード・解析中... (プロキシ経由)`);
+
+            // 2. Download Binary Excel
+            // 複数のCORSプロキシをフォールバックとして用意し、1つ目がダメなら2つ目を試す
+            const proxies = [
+                `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(xlsxPath)}`,
+                `https://corsproxy.io/?url=${encodeURIComponent(xlsxPath)}`,
+                `https://thingproxy.freeboard.io/fetch/${encodeURIComponent(xlsxPath)}`
+            ];
+            
+            let arrayBuffer = null;
+            let lastError = null;
+            
+            for(let proxyUrl of proxies) {
+                try {
+                    const excelResp = await fetch(proxyUrl);
+                    if(!excelResp.ok) throw new Error(`HTTP ${excelResp.status}`);
+                    arrayBuffer = await excelResp.arrayBuffer();
+                    break; // 成功したらループを抜ける
+                } catch(e) {
+                    lastError = e;
+                    logMessage(`プロキシでの取得失敗: 次のプロキシを試します...`, 'info');
+                }
+            }
+            
+            if(!arrayBuffer) {
+                throw new Error(`全パターンのExcelダウンロードに失敗しました: ${lastError.message}`);
+            }
+
+            // 3. Parse with SheetJS
+            const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+            
+            const dayData = {
+                date: dataDate,
+                p1: processPurpose1(workbook),
+                p2_225: processPurpose2(workbook, "別紙1")
+            };
+            
+            // Save to LocalStorage
+            storedData[dataDate] = dayData;
+            localStorage.setItem('jpx_options_history', JSON.stringify(storedData));
+            
+            logMessage(`解析完了し、データ(${dataDate})を保存しました`, 'success');
+            
+            updateDateSelector();
+            dateSelector.value = dataDate;
+            renderAllCharts(dataDate);
+
+        } catch (error) {
+            logMessage(`エラー: ${error.message}`, 'error');
+            console.error(error);
+        } finally {
+            btnFetch.disabled = false;
+            loader.classList.add('hidden');
+        }
+    }
+
+    // Parse logic for Purpose 1 (Overview)
+    function processPurpose1(wb) {
+        let rs = { labels: [], differences: [], totals: [] };
+        // Check "デリバティブ建玉残高状況" or similar
+        const sheetNameMatch = wb.SheetNames.find(n => n.includes("デリバティブ建玉") || n.includes("残高"));
+        if(!sheetNameMatch) return rs;
+        
+        const sheet = wb.Sheets[sheetNameMatch];
+        const data = XLSX.utils.sheet_to_json(sheet, {header: 1});
+        
+        const targets = ["日経225", "TOPIX", "日経225mini", "日経225マイクロ"];
+        
+        for (let target of targets) {
+            let found = false;
+            for (let r = 0; r < data.length; r++) {
+                if(found) break;
+                if (!data[r]) continue;
+                for (let c = 0; c < data[r].length; c++) {
+                    let val = String(data[r][c] || '').replace(/\s/g, '');
+                    if (val === target) {
+                        for (let r2 = r; r2 < data.length; r2++) {
+                            let val2 = String(data[r2][c+1] || '').replace(/\s/g, '');
+                            if (val2.includes("合計")) {
+                                let total = Number(String(data[r2][c+3]||'').replace(/,/g,''));
+                                let diff = Number(String(data[r2][c+4]||'').replace(/,/g,''));
+                                if (!isNaN(total) && !isNaN(diff)) {
+                                    rs.labels.push(target);
+                                    rs.totals.push(total);
+                                    rs.differences.push(diff);
+                                    found = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return rs;
+    }
+
+    // Parse logic for Purpose 2 (Put/Call differences by Strike)
+    function processPurpose2(wb, sheetKeyword) {
+        let rs = { strikes: [], c_oi: [], c_diff: [], p_oi: [], p_diff: [] };
+        const sheetNameMatch = wb.SheetNames.find(n => n.includes(sheetKeyword));
+        if(!sheetNameMatch) return rs;
+        
+        const sheet = wb.Sheets[sheetNameMatch];
+        const data = XLSX.utils.sheet_to_json(sheet, {header: 1});
+        
+        let strikeMap = {};
+        for(let row of data) {
+            if(!row) continue;
+            for(let c=0; c<row.length; c++) {
+                let cellVal = String(row[c] || '');
+                // Find e.g. "NIKKEI 225 P2603-38000" -> P and 38000
+                let match = cellVal.match(/([PC])\d{4}-(\d+)/i);
+                if(match) {
+                    let type = match[1].toUpperCase();
+                    let strikeVal = parseInt(match[2], 10);
+                    
+                    if(!strikeMap[strikeVal]) {
+                        strikeMap[strikeVal] = { p: 0, p_diff: 0, c: 0, c_diff: 0 };
+                    }
+                    
+                    let oi = Number(String(row[c+2]||'').replace(/,/g,'')) || 0;
+                    let diff = Number(String(row[c+3]||'').replace(/,/g,'')) || 0;
+                    
+                    if(type === 'P') {
+                        strikeMap[strikeVal].p += oi;
+                        strikeMap[strikeVal].p_diff += diff;
+                    } else if(type === 'C') {
+                        strikeMap[strikeVal].c += oi;
+                        strikeMap[strikeVal].c_diff += diff;
+                    }
+                }
+            }
+        }
+        
+        let sortedStrikes = Object.keys(strikeMap).map(Number).sort((a,b)=>a-b);
+        for(let s of sortedStrikes) {
+            let o = strikeMap[s];
+            if(o.p === 0 && o.c === 0 && o.p_diff === 0 && o.c_diff === 0) continue;
+            rs.strikes.push(s);
+            rs.c_oi.push(o.c);
+            rs.c_diff.push(o.c_diff);
+            rs.p_oi.push(o.p);
+            rs.p_diff.push(o.p_diff);
+        }
+        
+        return rs;
+    }
+
+    // --- Chart Rendering ---
+
+    function updateDateSelector() {
+        const dates = Object.keys(storedData).sort().reverse();
+        dateSelector.innerHTML = dates.map(d => `<option value="${d}">${d.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')}</option>`).join('');
+        if(dates.length === 0) {
+            dateSelector.innerHTML = '<option value="latest">データなし</option>';
+        }
+    }
+
+    function renderAllCharts(dateKey) {
+        if(!storedData[dateKey]) return;
+        const d = storedData[dateKey];
+        
+        renderPurpose1Chart(d.p1);
+        renderPurpose2Chart('chartPurpose2_225', 'p2_225', d.p2_225, '日経225');
+        renderTrendChart();
+    }
+
+    function renderPurpose1Chart(dataObj) {
+        // 1. Total OI Chart
+        const ctxTotal = document.getElementById('chartPurpose1_Total').getContext('2d');
+        if(chartObj.p1_total) chartObj.p1_total.destroy();
+        
+        chartObj.p1_total = new Chart(ctxTotal, {
+            type: 'bar',
+            data: {
+                labels: dataObj.labels.length > 0 ? dataObj.labels : ['No Data'],
+                datasets: [{
+                    label: '当日建玉残高',
+                    data: dataObj.totals.length > 0 ? dataObj.totals : [0],
+                    backgroundColor: '#7C4DFF',
+                    borderRadius: 4,
+                    barPercentage: 0.25
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { 
+                    legend: { 
+                        display: true, 
+                        labels: { color: '#64748b', boxWidth: 20, boxHeight: 6 } 
+                    } 
+                },
+                scales: {
+                    y: { 
+                        grid: { color: '#e2e8f0' }, ticks: { color: '#64748b' },
+                        title: { display: true, text: '総建玉', color: '#475569'}
+                    },
+                    x: { grid: { display: false }, ticks: { color: '#64748b' } }
+                }
+            }
+        });
+
+        // 2. Diff Chart
+        const ctxDiff = document.getElementById('chartPurpose1_Diff').getContext('2d');
+        if(chartObj.p1_diff) chartObj.p1_diff.destroy();
+
+        chartObj.p1_diff = new Chart(ctxDiff, {
+            type: 'bar',
+            data: {
+                labels: dataObj.labels.length > 0 ? dataObj.labels : ['No Data'],
+                datasets: [{
+                    label: '前日比 増減',
+                    data: dataObj.differences.length > 0 ? dataObj.differences : [0],
+                    backgroundColor: dataObj.differences.map(v => v >= 0 ? '#7C4DFF' : '#f43f5e'),
+                    borderRadius: 4,
+                    barPercentage: 0.25
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { 
+                    legend: { 
+                        display: true, 
+                        labels: { color: '#64748b', boxWidth: 20, boxHeight: 6 } 
+                    } 
+                },
+                scales: {
+                    y: { 
+                        grid: { color: '#e2e8f0' }, ticks: { color: '#64748b' },
+                        title: { display: true, text: '前日比', color: '#475569'}
+                    },
+                    x: { grid: { display: false }, ticks: { color: '#64748b' } }
+                }
+            }
+        });
+    }
+
+    function renderPurpose2Chart(canvasIdPrefix, targetChartObj, dataObj, titlePrefix) {
+        let hasData = dataObj && dataObj.strikes && dataObj.strikes.length > 0;
+        
+        let minStrike = 45000;
+        let maxStrike = 64000;
+        
+        const commonOptions = {
+            responsive: true, maintainAspectRatio: false,
+            indexAxis: 'y', // Horizontal bars
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            let label = context.dataset.label || '';
+                            let val = context.raw;
+                            if(label.includes('プット') && !label.includes('Call - Put')) val = -val;
+                            return `${label}: ${val > 0 ? '+':''}${val} 枚`;
+                        }
+                    }
+                },
+                zoom: {
+                    zoom: {
+                        wheel: { enabled: true },
+                        drag: { enabled: false }, // マウスで範囲指定のズームを無効化
+                        pinch: { enabled: true },
+                        mode: 'y',
+                    },
+                    pan: { enabled: false } // カスタムイベントで逆向きでパンを実装するため標準をOFF
+                }
+            },
+            scales: {
+                x: { 
+                    stacked: true, // これにより左右のバー位置がきれいにゼロから重なる（同じ垂直位置になる）
+                    grid: { color: '#e2e8f0' },
+                    ticks: { color: '#64748b' }
+                },
+                y: { 
+                    stacked: true, // Xと同様
+                    reverse: true, // 上から64000で並べる
+                    min: minStrike,
+                    max: maxStrike,
+                    grid: { color: '#e2e8f0' },
+                    ticks: { 
+                        color: function(context) {
+                            if (context.tick.value % 10000 === 0) return '#334155'; // 10000刻みを強調
+                            return '#64748b';
+                        },
+                        font: function(context) {
+                            if (context.tick.value % 10000 === 0) return { weight: 'bold' };
+                            return { weight: 'normal' };
+                        }
+                    },
+                    title: { display: true, text: '権利行使価格', color: '#475569'}
+                }
+            }
+        };
+
+        // カスタムパン（逆スクロール）用ヘルパー関数
+        const attachCustomPan = (canvasElement, chartInstanceKey) => {
+            let isDragging = false;
+            let lastY = 0;
+            canvasElement.onmousedown = (e) => { isDragging = true; lastY = e.clientY; };
+            canvasElement.onmouseup = () => { isDragging = false; };
+            canvasElement.onmouseleave = () => { isDragging = false; };
+            canvasElement.onmousemove = (e) => {
+                if(!isDragging) return;
+                const chart = chartObj[chartInstanceKey];
+                if(!chart) return;
+                const deltaY = e.clientY - lastY;
+                lastY = e.clientY;
+                
+                const scale = chart.scales.y;
+                const range = scale.max - scale.min;
+                // 移動範囲の計算 (ドラッグ方向を逆にする)
+                const step = (range / scale.height) * deltaY; 
+                
+                chart.options.scales.y.min += step; // 通常は-, 逆にしたいので+
+                chart.options.scales.y.max += step;
+                chart.update('none');
+            };
+        };
+
+        // 1. OI Chart (建玉)
+        let net_oi = [];
+        if(hasData) {
+            net_oi = dataObj.c_oi.map((c, i) => c - dataObj.p_oi[i]);
+        }
+
+        const ctxOI = document.getElementById(`${canvasIdPrefix}_OI`).getContext('2d');
+        if(chartObj[`${targetChartObj}_oi`]) chartObj[`${targetChartObj}_oi`].destroy();
+        
+        chartObj[`${targetChartObj}_oi`] = new Chart(ctxOI, {
+            type: 'bar',
+            data: {
+                labels: hasData ? dataObj.strikes : ['No Data'],
+                datasets: [
+                    {
+                        label: 'Call - Put 建玉', // 引き算結果
+                        data: hasData ? net_oi : [0],
+                        backgroundColor: hasData ? net_oi.map(v => v >= 0 ? '#7C4DFF' : '#f43f5e') : ['#7C4DFF'],
+                        barPercentage: 0.8
+                    }
+                ]
+            },
+            options: {
+                ...commonOptions,
+                plugins: {
+                    ...commonOptions.plugins,
+                    legend: { position: 'top', labels: { color: '#64748b', boxWidth: 20, boxHeight: 6 } }
+                },
+                scales: {
+                    ...commonOptions.scales,
+                    x: { ...commonOptions.scales.x, title: { display: true, text: 'Call-Put 差引建玉数 (単位：枚)', color: '#475569'} }
+                }
+            }
+        });
+        
+        attachCustomPan(ctxOI.canvas, `${targetChartObj}_oi`);
+
+        // 2. Diff Chart (増減)
+        const ctxDiff = document.getElementById(`${canvasIdPrefix}_Diff`).getContext('2d');
+        if(chartObj[`${targetChartObj}_diff`]) chartObj[`${targetChartObj}_diff`].destroy();
+        
+        chartObj[`${targetChartObj}_diff`] = new Chart(ctxDiff, {
+            type: 'bar',
+            data: {
+                labels: hasData ? dataObj.strikes : ['No Data'],
+                datasets: [
+                    {
+                        label: 'コール前日比', // コール緑
+                        data: hasData ? dataObj.c_diff : [0],
+                        backgroundColor: '#7C4DFF',
+                        barPercentage: 0.8
+                    },
+                    {
+                        label: 'プット前日比', // プット赤
+                        data: hasData ? dataObj.p_diff.map(v=>-v) : [0],
+                        backgroundColor: '#f43f5e',
+                        barPercentage: 0.8
+                    }
+                ]
+            },
+            options: {
+                ...commonOptions,
+                plugins: {
+                    ...commonOptions.plugins,
+                    legend: { position: 'top', labels: { color: '#64748b', boxWidth: 20, boxHeight: 6 } }
+                },
+                scales: {
+                    ...commonOptions.scales,
+                    x: { ...commonOptions.scales.x, title: { display: true, text: '増減数 (単位：枚)', color: '#475569'} }
+                }
+            }
+        });
+
+        attachCustomPan(ctxDiff.canvas, `${targetChartObj}_diff`);
+    }
+
+    function renderTrendChart() {
+        // Collect N225 Total OI from all dates
+        const dates = Object.keys(storedData).sort();
+        let trendData = [];
+        
+        for(let d of dates) {
+            let p1 = storedData[d].p1;
+            if(p1 && p1.labels) {
+                let idx = p1.labels.indexOf("日経225");
+                if(idx !== -1 && p1.totals[idx]) {
+                    trendData.push(p1.totals[idx]);
+                } else {
+                    trendData.push(null);
+                }
+            }
+        }
+
+        const ctx = document.getElementById('chartTrend').getContext('2d');
+        if(chartObj.trend) chartObj.trend.destroy();
+        
+        chartObj.trend = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: dates.map(d => d.replace(/(\d{4})(\d{2})(\d{2})/, '$2/$3')),
+                datasets: [{
+                    label: '日経225オプション 総建玉',
+                    data: trendData,
+                    borderColor: '#7C4DFF',
+                    backgroundColor: 'rgba(124, 77, 255, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    pointBackgroundColor: '#651FFF'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { labels: { color: '#64748b', boxWidth: 20, boxHeight: 6 } }
+                },
+                scales: {
+                    y: { grid: { color: '#e2e8f0' }, ticks: { color: '#64748b' } },
+                    x: { grid: { display: false }, ticks: { color: '#64748b' } }
+                }
+            }
+        });
+    }
+
+    // Run
+    window.addEventListener('DOMContentLoaded', init);
+
+</script>
+</body>
+</html>
