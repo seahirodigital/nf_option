@@ -99,12 +99,9 @@
                     <option value="latest">最新の取得データ</option>
                 </select>
             </div>
-            <div class="flex items-center gap-2">
-                <span class="text-slate-500 shrink-0 text-nowrap">自動取得:</span>
-                <input type="time" id="scheduleTime" value="20:10" class="bg-white border border-slate-200 rounded px-2 py-0.5 text-slate-700 focus:outline-none focus:border-[#7C4DFF]">
-            </div>
+
             <button id="btnFetch" class="bg-[#7C4DFF] text-white hover:bg-[#651FFF] font-bold px-3 py-1 rounded text-xs flex items-center gap-2 transition-colors shadow-sm">
-                <span>データ取得</span>
+                <span>データ再読込</span>
                 <div id="loadingIndicator" class="loading hidden w-3 h-3 !border-white/30 !border-t-white"></div>
             </button>
         </div>

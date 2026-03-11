@@ -99,12 +99,9 @@
                     <option value="latest">最新の取得データ</option>
                 </select>
             </div>
-            <div class="flex items-center gap-2">
-                <span class="text-slate-500 shrink-0 text-nowrap">自動取得:</span>
-                <input type="time" id="scheduleTime" value="20:10" class="bg-white border border-slate-200 rounded px-2 py-0.5 text-slate-700 focus:outline-none focus:border-[#7C4DFF]">
-            </div>
+
             <button id="btnFetch" class="bg-[#7C4DFF] text-white hover:bg-[#651FFF] font-bold px-3 py-1 rounded text-xs flex items-center gap-2 transition-colors shadow-sm">
-                <span>データ取得</span>
+                <span>データ再読込</span>
                 <div id="loadingIndicator" class="loading hidden w-3 h-3 !border-white/30 !border-t-white"></div>
             </button>
         </div>
@@ -160,14 +157,12 @@
 </div>
 
 <script>
-    let scheduleTimer = null;
-    let storedData = JSON.parse(localStorage.getItem('jpx_options_history') || '{}');
+    let storedData = {};
     let chartObj = { p1_total: null, p1_diff: null, p2_225_oi: null, p2_225_diff: null, trend: null };
     
     // UI Elements
     const logArea = document.getElementById('logArea');
     const statusText = document.getElementById('statusText');
-    const timeInput = document.getElementById('scheduleTime');
     const btnFetch = document.getElementById('btnFetch');
     const loader = document.getElementById('loadingIndicator');
     const dateSelector = document.getElementById('dateSelector');
@@ -187,25 +182,6 @@
 
     // Initialize
     function init() {
-        // Load default time
-        const savedTime = localStorage.getItem('jpx_schedule_time');
-        if(savedTime) timeInput.value = savedTime;
-        
-        setupScheduler();
-        updateDateSelector();
-        
-        // Initial Render
-        const dates = Object.keys(storedData).sort();
-        if(dates.length > 0) {
-            renderAllCharts(dates[dates.length-1]);
-        }
-        
-        timeInput.addEventListener('change', (e) => {
-            localStorage.setItem('jpx_schedule_time', e.target.value);
-            setupScheduler();
-            logMessage(`自動取得時刻を ${e.target.value} に設定しました`);
-        });
-
         btnFetch.addEventListener('click', () => {
             fetchAndProcessData();
         });
@@ -215,251 +191,37 @@
         });
         
         logMessage("システムを初期化しました", 'success');
+        fetchAndProcessData();
     }
 
-    // Scheduler
-    function setupScheduler() {
-        if(scheduleTimer) clearInterval(scheduleTimer);
-        
-        scheduleTimer = setInterval(() => {
-            const now = new Date();
-            const hr = now.getHours().toString().padStart(2, '0');
-            const min = now.getMinutes().toString().padStart(2, '0');
-            const currentHM = `${hr}:${min}`;
-            const targetHM = timeInput.value;
-            
-            if (currentHM === targetHM && now.getSeconds() < 10) {
-                const todayStr = getTodayString();
-                const lastFetch = localStorage.getItem('jpx_last_fetch_date');
-                if(lastFetch !== todayStr) {
-                    logMessage(`設定時刻 ${targetHM} になりました。自動取得を開始します...`);
-                    fetchAndProcessData();
-                    localStorage.setItem('jpx_last_fetch_date', todayStr);
-                }
-            }
-        }, 10000); // Check every 10s
-    }
-
-    function getTodayString() {
-        const d = new Date();
-        // Return YYYYMMDD
-        return d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
-    }
-
-    // --- Data Fetching & Extraction ---
-    
     async function fetchAndProcessData() {
         try {
             btnFetch.disabled = true;
             loader.classList.remove('hidden');
-            logMessage("最新のエクセルファイルURLを検索中...", 'info');
+            logMessage("最新データを取得中...", 'info');
             
-            // 1. Get JPX Index page via CORS proxies
-            const indexUrl = 'https://www.jpx.co.jp/markets/derivatives/trading-volume/index.html';
-            const indexProxies = [
-                `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(indexUrl)}`,
-                `https://api.allorigins.win/get?url=${encodeURIComponent(indexUrl)}`
-            ];
-
-            let htmlStr = null;
-            let indexError = null;
+            const response = await fetch(`./option_history.json?t=${new Date().getTime()}`);
+            if(!response.ok) throw new Error("データの取得に失敗しました");
             
-            for(let p of indexProxies) {
-                try {
-                    const idxResp = await fetch(p);
-                    if(!idxResp.ok) throw new Error(`HTTP ${idxResp.status}`);
-                    
-                    if(p.includes('allorigins.win/get')) {
-                        const json = await idxResp.json();
-                        htmlStr = json.contents;
-                    } else {
-                        htmlStr = await idxResp.text();
-                    }
-                    
-                    if(htmlStr && htmlStr.includes('open_interest.xlsx')) {
-                        break; // Success
-                    }
-                } catch(e) {
-                    indexError = e;
-                    logMessage(`Indexプロキシでの取得失敗: 次を試します...`, 'info');
-                }
-            }
+            storedData = await response.json();
             
-            if(!htmlStr || !htmlStr.includes('open_interest.xlsx')) {
-                throw new Error(`Indexページからのリンク情報の取得に全て失敗しました: ${indexError?.message}`);
-            }
-            
-            // Extract URL matching open_interest.xlsx using DOMParser for better accuracy
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(htmlStr, 'text/html');
-            const anchors = Array.from(doc.querySelectorAll('a'));
-            const targetAnchor = anchors.find(a => {
-                const h = a.getAttribute('href');
-                return h && h.includes('open_interest.xlsx');
-            });
-            
-            if(!targetAnchor) throw new Error("open_interest.xlsx のリンクが見つかりませんでした");
-            
-            // Remove whitespaces and newlines from the href string that JPX puts in
-            let xlsxPath = targetAnchor.getAttribute('href').replace(/\s+/g, '');
-            
-            if(!xlsxPath.startsWith('http')) {
-                xlsxPath = "https://www.jpx.co.jp" + (xlsxPath.startsWith('/') ? '' : '/') + xlsxPath;
-            }
-            logMessage(`発見: ${xlsxPath}`, 'success');
-            
-            // Extract date from filename (e.g. 20260310open_interest.xlsx)
-            const dateMatch = xlsxPath.match(/(\d{8})open_interest/);
-            const dataDate = dateMatch ? dateMatch[1] : getTodayString();
-            
-            logMessage(`エクセルデータをダウンロード・解析中... (プロキシ経由)`);
-
-            // 2. Download Binary Excel
-            // 複数のCORSプロキシをフォールバックとして用意し、1つ目がダメなら2つ目を試す
-            const proxies = [
-                `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(xlsxPath)}`,
-                `https://corsproxy.io/?url=${encodeURIComponent(xlsxPath)}`,
-                `https://thingproxy.freeboard.io/fetch/${encodeURIComponent(xlsxPath)}`
-            ];
-            
-            let arrayBuffer = null;
-            let lastError = null;
-            
-            for(let proxyUrl of proxies) {
-                try {
-                    const excelResp = await fetch(proxyUrl);
-                    if(!excelResp.ok) throw new Error(`HTTP ${excelResp.status}`);
-                    arrayBuffer = await excelResp.arrayBuffer();
-                    break; // 成功したらループを抜ける
-                } catch(e) {
-                    lastError = e;
-                    logMessage(`プロキシでの取得失敗: 次のプロキシを試します...`, 'info');
-                }
-            }
-            
-            if(!arrayBuffer) {
-                throw new Error(`全パターンのExcelダウンロードに失敗しました: ${lastError.message}`);
-            }
-
-            // 3. Parse with SheetJS
-            const workbook = XLSX.read(arrayBuffer, { type: 'array' });
-            
-            const dayData = {
-                date: dataDate,
-                p1: processPurpose1(workbook),
-                p2_225: processPurpose2(workbook, "別紙1")
-            };
-            
-            // Save to LocalStorage
-            storedData[dataDate] = dayData;
-            localStorage.setItem('jpx_options_history', JSON.stringify(storedData));
-            
-            logMessage(`解析完了し、データ(${dataDate})を保存しました`, 'success');
+            logMessage(`データの読込に成功しました`, 'success');
             
             updateDateSelector();
-            dateSelector.value = dataDate;
-            renderAllCharts(dataDate);
+            const dates = Object.keys(storedData).sort();
+            if(dates.length > 0) {
+                const latestDate = dates[dates.length-1];
+                dateSelector.value = latestDate;
+                renderAllCharts(latestDate);
+            }
 
         } catch (error) {
-            logMessage(`エラー: ${error.message}`, 'error');
+            logMessage(`エラー: ${error.message} (本日のデータがまだ準備されていない可能性があります)`, 'error');
             console.error(error);
         } finally {
             btnFetch.disabled = false;
             loader.classList.add('hidden');
         }
-    }
-
-    // Parse logic for Purpose 1 (Overview)
-    function processPurpose1(wb) {
-        let rs = { labels: [], differences: [], totals: [] };
-        // Check "デリバティブ建玉残高状況" or similar
-        const sheetNameMatch = wb.SheetNames.find(n => n.includes("デリバティブ建玉") || n.includes("残高"));
-        if(!sheetNameMatch) return rs;
-        
-        const sheet = wb.Sheets[sheetNameMatch];
-        const data = XLSX.utils.sheet_to_json(sheet, {header: 1});
-        
-        const targets = ["日経225", "TOPIX", "日経225mini", "日経225マイクロ"];
-        
-        for (let target of targets) {
-            let found = false;
-            for (let r = 0; r < data.length; r++) {
-                if(found) break;
-                if (!data[r]) continue;
-                for (let c = 0; c < data[r].length; c++) {
-                    let val = String(data[r][c] || '').replace(/\s/g, '');
-                    if (val === target) {
-                        for (let r2 = r; r2 < data.length; r2++) {
-                            let val2 = String(data[r2][c+1] || '').replace(/\s/g, '');
-                            if (val2.includes("合計")) {
-                                let total = Number(String(data[r2][c+3]||'').replace(/,/g,''));
-                                let diff = Number(String(data[r2][c+4]||'').replace(/,/g,''));
-                                if (!isNaN(total) && !isNaN(diff)) {
-                                    rs.labels.push(target);
-                                    rs.totals.push(total);
-                                    rs.differences.push(diff);
-                                    found = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return rs;
-    }
-
-    // Parse logic for Purpose 2 (Put/Call differences by Strike)
-    function processPurpose2(wb, sheetKeyword) {
-        let rs = { strikes: [], c_oi: [], c_diff: [], p_oi: [], p_diff: [] };
-        const sheetNameMatch = wb.SheetNames.find(n => n.includes(sheetKeyword));
-        if(!sheetNameMatch) return rs;
-        
-        const sheet = wb.Sheets[sheetNameMatch];
-        const data = XLSX.utils.sheet_to_json(sheet, {header: 1});
-        
-        let strikeMap = {};
-        for(let row of data) {
-            if(!row) continue;
-            for(let c=0; c<row.length; c++) {
-                let cellVal = String(row[c] || '');
-                // Find e.g. "NIKKEI 225 P2603-38000" -> P and 38000
-                let match = cellVal.match(/([PC])\d{4}-(\d+)/i);
-                if(match) {
-                    let type = match[1].toUpperCase();
-                    let strikeVal = parseInt(match[2], 10);
-                    
-                    if(!strikeMap[strikeVal]) {
-                        strikeMap[strikeVal] = { p: 0, p_diff: 0, c: 0, c_diff: 0 };
-                    }
-                    
-                    let oi = Number(String(row[c+2]||'').replace(/,/g,'')) || 0;
-                    let diff = Number(String(row[c+3]||'').replace(/,/g,'')) || 0;
-                    
-                    if(type === 'P') {
-                        strikeMap[strikeVal].p += oi;
-                        strikeMap[strikeVal].p_diff += diff;
-                    } else if(type === 'C') {
-                        strikeMap[strikeVal].c += oi;
-                        strikeMap[strikeVal].c_diff += diff;
-                    }
-                }
-            }
-        }
-        
-        let sortedStrikes = Object.keys(strikeMap).map(Number).sort((a,b)=>a-b);
-        for(let s of sortedStrikes) {
-            let o = strikeMap[s];
-            if(o.p === 0 && o.c === 0 && o.p_diff === 0 && o.c_diff === 0) continue;
-            rs.strikes.push(s);
-            rs.c_oi.push(o.c);
-            rs.c_diff.push(o.c_diff);
-            rs.p_oi.push(o.p);
-            rs.p_diff.push(o.p_diff);
-        }
-        
-        return rs;
     }
 
     // --- Chart Rendering ---
