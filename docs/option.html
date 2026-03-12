@@ -24,8 +24,31 @@
     </script>
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script> <!-- Required for zoom plugin -->
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-app.js";
+        import { getFirestore, collection, getDocs, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyCMTP8g8Ku1Vy6IAq9wHdESP3pRkDberOM",
+            authDomain: "nkf-option.firebaseapp.com",
+            projectId: "nkf-option",
+            storageBucket: "nkf-option.firebasestorage.app",
+            messagingSenderId: "1061572991366",
+            appId: "1:1061572991366:web:e326d645e8be1047153407",
+            measurementId: "G-8DLH6CCC3W"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        
+        window.firebaseDb = db;
+        window.firebaseCollection = collection;
+        window.firebaseGetDocs = getDocs;
+        window.firebaseDoc = doc;
+        window.firebaseGetDoc = getDoc;
+    </script>
     <!-- SheetJS (XLSX) -->
     <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
     <style>
@@ -183,7 +206,7 @@
     // Initialize
     function init() {
         btnFetch.addEventListener('click', () => {
-            fetchAndProcessData();
+            initFirebase();
         });
 
         dateSelector.addEventListener('change', (e) => {
@@ -191,14 +214,58 @@
         });
         
         logMessage("システムを初期化しました", 'success');
-        fetchAndProcessData();
+        initFirebase();
+    }
+
+    async function initFirebase() {
+        try {
+            logMessage("日付リスト読込中...", 'info');
+            btnFetch.disabled = true;
+            loader.classList.remove('hidden');
+
+            const db = window.firebaseDb;
+            if (!db) throw new Error("Firebase SDK not loaded");
+
+            const optionCol = window.firebaseCollection(db, 'option_data');
+            const snapshot = await window.firebaseGetDocs(optionCol);
+
+            let dates = [];
+            let bulkData = {};
+            snapshot.forEach(doc => {
+                dates.push(doc.id);
+                bulkData[doc.id] = doc.data(); 
+            });
+
+            dates.sort().reverse();
+            storedData = bulkData;
+
+            updateDateSelector(dates);
+
+            if (dates.length > 0) {
+                const latestDate = dates[0];
+                dateSelector.value = latestDate;
+                renderAllCharts(latestDate);
+                logMessage(`データの読込に成功しました`, 'success');
+            } else {
+                logMessage("データがありません", 'error');
+            }
+        } catch (err) {
+             console.error("Firebase init error:", err);
+             logMessage(`エラー: Firebaseの読み込みに失敗しました`, 'error');
+             // 従来のJSONでのフォールバック
+             fetchAndProcessData();
+        } finally {
+            btnFetch.disabled = false;
+            loader.classList.add('hidden');
+        }
     }
 
     async function fetchAndProcessData() {
+        // Fallback functionality.
         try {
             btnFetch.disabled = true;
             loader.classList.remove('hidden');
-            logMessage("最新データを取得中...", 'info');
+            logMessage("ローカルJSONからデータを取得中...", 'info');
             
             const response = await fetch(`./option_history.json?t=${new Date().getTime()}`);
             if(!response.ok) throw new Error("データの取得に失敗しました");
@@ -207,10 +274,10 @@
             
             logMessage(`データの読込に成功しました`, 'success');
             
-            updateDateSelector();
-            const dates = Object.keys(storedData).sort();
+            const dates = Object.keys(storedData).sort().reverse();
+            updateDateSelector(dates);
             if(dates.length > 0) {
-                const latestDate = dates[dates.length-1];
+                const latestDate = dates[0];
                 dateSelector.value = latestDate;
                 renderAllCharts(latestDate);
             }
@@ -226,8 +293,10 @@
 
     // --- Chart Rendering ---
 
-    function updateDateSelector() {
-        const dates = Object.keys(storedData).sort().reverse();
+    function updateDateSelector(dates = []) {
+        if (!dates || dates.length === 0) {
+            dates = Object.keys(storedData).sort().reverse();
+        }
         dateSelector.innerHTML = dates.map(d => `<option value="${d}">${d.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')}</option>`).join('');
         if(dates.length === 0) {
             dateSelector.innerHTML = '<option value="latest">データなし</option>';

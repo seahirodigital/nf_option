@@ -6,6 +6,35 @@ import requests
 import pandas as pd
 from datetime import datetime
 import dateutil.relativedelta
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import firestore
+
+def init_firestore():
+    if not firebase_admin._apps:
+        key_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'firebase-key.json')
+        try:
+            if os.path.exists(key_path):
+                cred = credentials.Certificate(key_path)
+            elif 'FIREBASE_KEY_JSON' in os.environ and os.environ['FIREBASE_KEY_JSON'].strip():
+                try:
+                    cred_dict = json.loads(os.environ['FIREBASE_KEY_JSON'])
+                except:
+                    import ast
+                    cred_dict = ast.literal_eval(os.environ['FIREBASE_KEY_JSON'])
+                cred = credentials.Certificate(cred_dict)
+            else:
+                logging.warning("Firebase credential missing. Skipping Firebase initialization.")
+                return None
+            firebase_admin.initialize_app(cred)
+        except Exception as e:
+            logging.error(f"Firebase initialization failed: {e}")
+            return None
+    try:
+        return firestore.client()
+    except Exception as e:
+        logging.error(f"Firestore client init failed: {e}")
+        return None
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -144,6 +173,7 @@ def run():
     months_to_try = [now, now - dateutil.relativedelta.relativedelta(months=1)]
     
     xlsx_path = None
+    data_date = None
     for m in months_to_try:
         yyyymm = m.strftime('%Y%m')
         url = f"https://www.jpx.co.jp/automation/markets/derivatives/participant-volume/json/participant_volume_{yyyymm}.json"
@@ -156,6 +186,7 @@ def run():
                 path = row.get('WholeDay')
                 if path and str(path).strip() != '-' and 'xlsx' in str(path):
                     xlsx_path = path
+                    data_date = str(row.get('TradeDate'))
                     break
         if xlsx_path:
             break
@@ -198,6 +229,20 @@ def run():
         json.dump(output_data, f, ensure_ascii=False, indent=2)
         
     logging.info(f"Successfully saved data to {out_path}")
+
+    # Save to Firebase
+    if data_date:
+        db = init_firestore()
+        if db:
+            try:
+                # Firestore will not accept int64, doing a quick round-trip stringification
+                clean_data = json.loads(json.dumps(output_data))
+                db.collection('teguchi_data').document(data_date).set(clean_data)
+                logging.info(f"Successfully saved {data_date} teguchi data to Firebase.")
+            except Exception as e:
+                logging.error(f"Error saving {data_date} teguchi data to Firebase: {e}")
+    else:
+        logging.warning("No data_date found, cannot save to Firebase.")
 
 if __name__ == "__main__":
     run()

@@ -6,6 +6,36 @@ import os
 from bs4 import BeautifulSoup
 from datetime import datetime
 import io
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import firestore
+
+def init_firestore():
+    if not firebase_admin._apps:
+        key_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'firebase-key.json')
+        try:
+            if os.path.exists(key_path):
+                cred = credentials.Certificate(key_path)
+            elif 'FIREBASE_KEY_JSON' in os.environ and os.environ['FIREBASE_KEY_JSON'].strip():
+                try:
+                    cred_dict = json.loads(os.environ['FIREBASE_KEY_JSON'])
+                except:
+                    # Allow fallback to parsing it as a string formatted json (some environments escape quotes)
+                    import ast
+                    cred_dict = ast.literal_eval(os.environ['FIREBASE_KEY_JSON'])
+                cred = credentials.Certificate(cred_dict)
+            else:
+                print("Firebase credential missing. Skipping Firebase initialization.")
+                return None
+            firebase_admin.initialize_app(cred)
+        except Exception as e:
+            print(f"Firebase initialization failed: {e}")
+            return None
+    try:
+        return firestore.client()
+    except Exception as e:
+        print(f"Firestore client init failed: {e}")
+        return None
 
 def fetch_option_data():
     index_url = 'https://www.jpx.co.jp/markets/derivatives/trading-volume/index.html'
@@ -141,7 +171,20 @@ def fetch_option_data():
     with open(abs_history_file, 'w', encoding='utf-8') as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
         
-    print(f"Saved {data_date} options data successfully.")
+    print(f"Saved {data_date} options data successfully format JSON.")
+
+    db = init_firestore()
+    if db:
+        try:
+            doc_ref = db.collection('option_data').document(data_date)
+            # Remove any non-supported types like numpy primitives if applicable.
+            # But here day_data comes from pd but converted correctly?
+            # day_data contains floats and ints and arrays, it should be fine.
+            # Let's save to firebase.
+            doc_ref.set(day_data)
+            print(f"Successfully saved {data_date} options data to Firebase.")
+        except Exception as e:
+            print(f"Error saving {data_date} options data to Firebase: {e}")
 
 if __name__ == "__main__":
     fetch_option_data()

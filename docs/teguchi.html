@@ -25,6 +25,31 @@
         }
     </script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-app.js";
+        import { getFirestore, collection, getDocs, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyCMTP8g8Ku1Vy6IAq9wHdESP3pRkDberOM",
+            authDomain: "nkf-option.firebaseapp.com",
+            projectId: "nkf-option",
+            storageBucket: "nkf-option.firebasestorage.app",
+            messagingSenderId: "1061572991366",
+            appId: "1:1061572991366:web:e326d645e8be1047153407",
+            measurementId: "G-8DLH6CCC3W"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        
+        // Make db globally available for Vue
+        window.firebaseDb = db;
+        window.firebaseCollection = collection;
+        window.firebaseGetDocs = getDocs;
+        window.firebaseDoc = doc;
+        window.firebaseGetDoc = getDoc;
+    </script>
     <style>
         body { background-color: #f8fafc; color: #334155; font-family: 'Helvetica Neue', Arial, sans-serif; min-height: 100vh; }
         .glass-panel { background: white; border: 1px solid #e2e8f0; border-radius: 0.75rem; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05); }
@@ -87,8 +112,15 @@
             </div>
             
             <div class="flex items-center gap-4 text-xs mt-3 md:mt-0 relative">
+                <div class="flex items-center gap-2">
+                    <span class="text-slate-500 shrink-0">データ基準日:</span>
+                    <select v-model="selectedDate" @change="fetchDataForDate" class="bg-white border border-slate-200 rounded px-2 py-0.5 text-slate-700 focus:outline-none focus:border-[#7C4DFF]">
+                        <option v-for="d in availableDates" :key="d" :value="d">{{ formatDate(d) }}</option>
+                        <option v-if="availableDates.length === 0" value="">読込中...</option>
+                    </select>
+                </div>
                 <button @click="fetchLatest" :disabled="loading" class="btn-primary font-bold px-3 py-1 rounded flex items-center gap-2 transition-colors shadow-sm">
-                    <span>データ再読み込み</span>
+                    <span>データ再読込</span>
                     <div v-if="loading" class="loading w-3 h-3 !border-white/30 !border-t-white"></div>
                 </button>
             </div>
@@ -197,6 +229,8 @@
                     results: [],
                     matrixData: [],
                     strikes: [],
+                    availableDates: [],
+                    selectedDate: '',
                     sortKey: 'Rank',
                     sortAsc: true
                 }
@@ -217,9 +251,75 @@
                 }
             },
             mounted() {
-                this.fetchLatest();
+                this.initFirebase();
             },
             methods: {
+                formatDate(dateStr) {
+                    if (!dateStr || dateStr.length !== 8) return dateStr;
+                    return `${dateStr.substring(0,4)}-${dateStr.substring(4,6)}-${dateStr.substring(6,8)}`;
+                },
+                async initFirebase() {
+                    this.loading = true;
+                    this.statusText = "日付リスト読込中...";
+                    try {
+                        const db = window.firebaseDb;
+                        if (!db) throw new Error("Firebase SDK not loaded");
+                        
+                        const teguchiCol = window.firebaseCollection(db, 'teguchi_data');
+                        const snapshot = await window.firebaseGetDocs(teguchiCol);
+                        
+                        let dates = [];
+                        snapshot.forEach(doc => {
+                            dates.push(doc.id);
+                        });
+                        
+                        dates.sort().reverse(); // 降順
+                        this.availableDates = dates;
+                        
+                        if(dates.length > 0) {
+                            this.selectedDate = dates[0];
+                            await this.fetchDataForDate();
+                        } else {
+                            this.statusText = "データなし";
+                            this.loading = false;
+                        }
+                    } catch (err) {
+                        console.error("Firebase init error:", err);
+                        // Fallback
+                        this.fetchLatest();
+                    }
+                },
+                async fetchDataForDate() {
+                    if(!this.selectedDate) return;
+                    this.loading = true;
+                    this.error = null;
+                    this.statusText = `${this.formatDate(this.selectedDate)} 読込中...`;
+                    
+                    try {
+                        const db = window.firebaseDb;
+                        const docRef = window.firebaseDoc(db, 'teguchi_data', this.selectedDate);
+                        const docSnap = await window.firebaseGetDoc(docRef);
+                        
+                        if (docSnap.exists()) {
+                            const data = docSnap.data();
+                            this.results = data.results || [];
+                            this.matrixData = data.matrix || [];
+                            this.strikes = data.strikes || [];
+                            this.statusText = "読込完了";
+                        } else {
+                            this.error = `${this.formatDate(this.selectedDate)} のデータが見つかりません。`;
+                            this.statusText = "エラー";
+                            this.results = [];
+                            this.matrixData = [];
+                        }
+                    } catch(err) {
+                        console.error(err);
+                        this.error = "Firebase通信エラーが発生しました。";
+                        this.statusText = "エラー";
+                    } finally {
+                        this.loading = false;
+                    }
+                },
                 sortBy(key) {
                     if (this.sortKey === key) {
                         this.sortAsc = !this.sortAsc
@@ -246,33 +346,8 @@
                     }
                 },
                 async fetchLatest() {
-                    this.loading = true;
-                    this.error = null;
-                    this.statusText = "データ読込中...";
-                    
-                    try {
-                        // GitHub Pagesでホストされている data.json を読み込む
-                        // キャッシュを避けるためにタイムスタンプを付与
-                        const response = await fetch(`./data.json?t=${new Date().getTime()}`);
-                        
-                        const data = await response.json();
-                        
-                        if (!response.ok) {
-                            throw new Error(data.error || 'データ読込エラーが発生しました');
-                        }
-                        
-                        this.results = data.results || [];
-                        this.matrixData = data.matrix || [];
-                        this.strikes = data.strikes || [];
-                        this.statusText = "読込完了";
-                        
-                    } catch (err) {
-                        console.error(err);
-                        this.error = "本日のデータがまだ準備されていないか、エラーが発生しました。";
-                        this.statusText = "エラー発生";
-                    } finally {
-                        this.loading = false;
-                    }
+                    // Update dropdown and fetch the latest date instead of json
+                    this.initFirebase();
                 }
             }
         }).mount('#app')
