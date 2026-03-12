@@ -1,0 +1,28 @@
+{
+  "columns": [
+    {
+      "id": "column",
+      "title": "タスク"
+    },
+    {
+      "id": "doing",
+      "title": "実行中"
+    },
+    {
+      "id": "done",
+      "title": "完了"
+    }
+  ],
+  "order": {
+    "column": [
+      "mmmqs7j440uf",
+      "mmmqsf0iyx1v",
+      "mmmqul22vysi",
+      "mmmqu0bgqeho",
+      "mmmrdpwy39pk"
+    ],
+    "doing": [],
+    "done": []
+  },
+  "labels": []
+}
