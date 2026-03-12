@@ -48,6 +48,7 @@
         window.firebaseGetDocs = getDocs;
         window.firebaseDoc = doc;
         window.firebaseGetDoc = getDoc;
+        window.dispatchEvent(new Event('firebase-ready'));
     </script>
     <!-- SheetJS (XLSX) -->
     <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
@@ -214,7 +215,19 @@
         });
         
         logMessage("システムを初期化しました", 'success');
-        initFirebase();
+        if (window.firebaseDb) {
+            initFirebase();
+        } else {
+            window.addEventListener('firebase-ready', () => {
+                initFirebase();
+            });
+            // タイムアウト設定：一定時間待ってもロードされない場合はエラーにする
+            setTimeout(() => {
+                if (!window.firebaseDb) {
+                    logMessage("Firebaseの読み込みがタイムアウトしました。通信環境を確認してください。", 'error');
+                }
+            }, 5000);
+        }
     }
 
     async function initFirebase() {

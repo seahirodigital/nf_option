@@ -49,6 +49,7 @@
         window.firebaseGetDocs = getDocs;
         window.firebaseDoc = doc;
         window.firebaseGetDoc = getDoc;
+        window.dispatchEvent(new Event('firebase-ready'));
     </script>
     <style>
         body { background-color: #f8fafc; color: #334155; font-family: 'Helvetica Neue', Arial, sans-serif; min-height: 100vh; }
@@ -251,7 +252,22 @@
                 }
             },
             mounted() {
-                this.initFirebase();
+                if (window.firebaseDb) {
+                    this.initFirebase();
+                } else {
+                    // Wait for the async module to load the Firebase SDK
+                    window.addEventListener('firebase-ready', () => {
+                        this.initFirebase();
+                    });
+                    
+                    setTimeout(() => {
+                        if (!window.firebaseDb) {
+                            this.loading = false;
+                            this.statusText = "通信エラー";
+                            this.error = "サーバーへの接続がタイムアウトしました。通信環境を確認の上、再読み込みしてください。";
+                        }
+                    }, 5000);
+                }
             },
             methods: {
                 formatDate(dateStr) {
@@ -259,11 +275,12 @@
                     return `${dateStr.substring(0,4)}-${dateStr.substring(4,6)}-${dateStr.substring(6,8)}`;
                 },
                 async initFirebase() {
+                    if (!window.firebaseDb) return; // Prevent premature execution
+                    
                     this.loading = true;
                     this.statusText = "日付リスト読込中...";
                     try {
                         const db = window.firebaseDb;
-                        if (!db) throw new Error("Firebase SDK not loaded");
                         
                         const teguchiCol = window.firebaseCollection(db, 'teguchi_data');
                         const snapshot = await window.firebaseGetDocs(teguchiCol);
@@ -346,8 +363,9 @@
                     }
                 },
                 async fetchLatest() {
-                    // Update dropdown and fetch the latest date instead of json
-                    this.initFirebase();
+                    if (window.firebaseDb) {
+                        this.initFirebase();
+                    }
                 }
             }
         }).mount('#app')
