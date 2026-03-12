@@ -38,19 +38,35 @@ def init_firestore():
         return None
 
 def fetch_option_data():
+    import sys
+    target_date = None
+    if len(sys.argv) > 1:
+        target_date = sys.argv[1] # Expected format YYYYMMDD
+        
     index_url = 'https://www.jpx.co.jp/markets/derivatives/trading-volume/index.html'
     html = requests.get(index_url, timeout=10).text
     soup = BeautifulSoup(html, 'html.parser')
     
     xlsx_path = None
-    for a in soup.find_all('a'):
-        href = a.get('href')
-        if href and 'open_interest.xlsx' in href:
-            xlsx_path = href.strip()
-            break
+    
+    # If a specific date is given, try to find a link that matches it exactly
+    if target_date:
+        for a in soup.find_all('a'):
+            href = a.get('href')
+            if href and f'{target_date}open_interest.xlsx' in href:
+                xlsx_path = href.strip()
+                break
+    
+    # Otherwise, fallback to the latest one
+    if not xlsx_path:
+        for a in soup.find_all('a'):
+            href = a.get('href')
+            if href and 'open_interest.xlsx' in href:
+                xlsx_path = href.strip()
+                break
             
     if not xlsx_path:
-        print("open_interest.xlsx not found")
+        print(f"open_interest.xlsx not found for target {target_date or 'latest'}")
         return
         
     if not xlsx_path.startswith('http'):
@@ -63,10 +79,14 @@ def fetch_option_data():
     if match:
         data_date = match.group(1)
     else:
-        data_date = datetime.now().strftime('%Y%m%d')
+        data_date = target_date if target_date else datetime.now().strftime('%Y%m%d')
         
     print(f"Downloading {xlsx_path} for date {data_date}")
-    content = requests.get(xlsx_path, timeout=10).content
+    try:
+        content = requests.get(xlsx_path, timeout=10).content
+    except Exception as e:
+        print(f"Failed to fetch {xlsx_path}: {e}")
+        return
     
     xls = pd.ExcelFile(io.BytesIO(content), engine='openpyxl')
     
