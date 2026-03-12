@@ -168,9 +168,24 @@ def process_dataframe(df, nikkei_price=55000.0, topix_price=3700.0, delta_atm=0.
     return {"status": "success", "results": results, "matrix": matrix_data, "strikes": strikes if not op_df.empty else []}
 
 def run():
-    logging.info("Starting JPX Data Fetch...")
-    now = datetime.now()
-    months_to_try = [now, now - dateutil.relativedelta.relativedelta(months=1)]
+    import sys
+    target_date = None
+    if len(sys.argv) > 1:
+        target_date = sys.argv[1].replace('-', '') # e.g. 20260310
+        
+    logging.info(f"Starting JPX Data Fetch for date {target_date or 'latest'}...")
+    
+    # Decide which months to check based on target_date
+    if target_date:
+        try:
+            target_dt = datetime.strptime(target_date, '%Y%m%d')
+            months_to_try = [target_dt]
+        except ValueError:
+            target_dt = datetime.now()
+            months_to_try = [target_dt]
+    else:
+        now = datetime.now()
+        months_to_try = [now, now - dateutil.relativedelta.relativedelta(months=1)]
     
     xlsx_path = None
     data_date = None
@@ -184,9 +199,13 @@ def run():
             data = r.json()
             for row in data.get('TableDatas', []):
                 path = row.get('WholeDay')
+                trade_date = str(row.get('TradeDate'))
+                if target_date and trade_date != target_date:
+                    continue
+                    
                 if path and str(path).strip() != '-' and 'xlsx' in str(path):
                     xlsx_path = path
-                    data_date = str(row.get('TradeDate'))
+                    data_date = trade_date
                     break
         if xlsx_path:
             break
